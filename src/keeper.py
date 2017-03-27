@@ -10,6 +10,8 @@ from copy import deepcopy
 from cv_bridge import CvBridge
 import numpy as np
 from geometry_msgs.msg import Twist, Vector3
+if not cv2.__version__ == '3.1.0-dev':
+    import cv2.cv as cv
 
 class Keeper(object):
     """ The Keeper is a Python object that encompasses a ROS node
@@ -27,7 +29,10 @@ class Keeper(object):
         self.min_radius_1 = 10
         self.param1 = 50
         self.param2 = 20
-
+        if cv2.__version__ == '3.1.0-dev':
+            self.houghGrad = cv2.HOUGH_GRADIENT
+        else:
+            self.houghGrad = cv.CV_HOUGH_GRADIENT
         self.image_info_window = None
         self.cv_image = None                        # the latest image from the camera
         self.bridge = CvBridge()                    # used to convert ROS messages to OpenCV
@@ -88,7 +93,7 @@ class Keeper(object):
 
         #     self.center_x, self.center_y = moments['m10']/moments['m00'], moments['m01']/moments['m00']
         self.binary_image = cv2.medianBlur(self.binary_image, 5)
-        self.circles = cv2.HoughCircles(cv2.cvtColor(self.cv_image, cv2.COLOR_BGR2GRAY),cv2.HOUGH_GRADIENT,1,20,
+        self.circles = cv2.HoughCircles(cv2.cvtColor(self.cv_image, cv2.COLOR_BGR2GRAY),self.houghGrad,1,20,
                             param1=self.param1,param2=self.param2,minRadius=self.min_radius_1,maxRadius=self.max_radius_1)
         #self.circles = cv2.HoughCircles(self.binary_image,cv.CV_HOUGH_GRADIENT,1,20,
                             #param1=self.param1,param2=self.param2,minRadius=self.min_radius_1,maxRadius=self.max_radius_1)
