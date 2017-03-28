@@ -23,6 +23,7 @@ class Keeper(object):
     def __init__(self, image_topic):
         """ Initialize the ball tracker """
         rospy.init_node('keeper')
+        self.cmd_vel = Twist(linear=Vector3(0, 0, 0), angular=Vector3(0, 0, 0))
         self.blue = 150
         self.red = 100
         self.green = 100
@@ -30,6 +31,7 @@ class Keeper(object):
         self.min_radius_1 = 10
         self.param1 = 50
         self.param2 = 20
+        self.kp = 0.05
         if cv2.__version__ == '3.1.0-dev':
             self.houghGrad = cv2.HOUGH_GRADIENT
         else:
@@ -38,6 +40,7 @@ class Keeper(object):
         self.cv_image = None                        # the latest image from the camera
         self.bridge = CvBridge()                    # used to convert ROS messages to OpenCV
         self.binary_image = None
+        self.lastCircle = [0, 0, 0]
         rospy.Subscriber(image_topic, Image, self.process_image)
         self.pub = rospy.Publisher('cmd_vel', Twist, queue_size=10)
         cv2.namedWindow('video_window')
@@ -100,46 +103,51 @@ class Keeper(object):
 
         #     self.center_x, self.center_y = moments['m10']/moments['m00'], moments['m01']/moments['m00']
         self.binary_image = cv2.medianBlur(self.binary_image, 5)
-        self.circles = cv2.HoughCircles(cv2.cvtColor(self.cv_image, cv2.COLOR_BGR2GRAY),self.houghGrad,1,self.min_dist,
-                            param1=self.param1,param2=self.param2,minRadius=self.min_radius_1,maxRadius=self.max_radius_1)
+        self.circles = cv2.HoughCircles(cv2.cvtColor(self.cv_image, cv2.COLOR_BGR2GRAY),self.houghGrad,1,255,
+                            param1=70,param2=30,minRadius=self.min_radius_1,maxRadius=self.max_radius_1)
         #self.circles = cv2.HoughCircles(self.binary_image,cv.CV_HOUGH_GRADIENT,1,20,
                             #param1=self.param1,param2=self.param2,minRadius=self.min_radius_1,maxRadius=self.max_radius_1)
         # cv2.circle(self.cv_image, (int(self.center_x),int(self.center_y)), 10, (255,255,255))
-    
+
     def blue_checker(self, circle):
         """ checks each circle to see how blue it is at several pixels within the circle"""
         thetas = (0, 45, 90, 135, 180, 125,270, 315)
         s = 0
-        print("circle = ",circle)
         for t in thetas:
             y_cord = int(.75*circle[2]*math.sin(math.radians(t))+circle[0])
             x_cord = int(.75*circle[2]*math.cos(math.radians(t))+circle[1])
-            if x_cord < 640 and y_cord < 480:
+            if x_cord < self.cv_image.shape[1] and y_cord < self.cv_image.shape[0]:
                 s += self.cv_image[y_cord, x_cord,0]
         return s
 
 
     def run(self):
         """ The main run loop, in this node it doesn't do anything """
-        r = rospy.Rate(5)
-        while not rospy.is_shutdown():
 
+        r = rospy.Rate(5)
+        xLin = 0
+        xAng = 0
+        while not rospy.is_shutdown():
             if not (self.circles == None):
+                bestFitCircle = [0, 0, 0]
                 current_max = 0
-                for i,q in enumerate(self.circles[0,:]):
+                for q in self.circles[0,:]:
                     # draw the outer circle
-                    print(q)
                     if self.blue_checker(q) > current_max:
                         current_max = self.blue_checker(q)
-                        ind = i
+                        bestFitCircle = q
+
+                if not self.cv_image == None:
+                    cv2.circle(self.cv_image,(bestFitCircle[0],bestFitCircle[1]), bestFitCircle[2],(0,255,0),2)
+                        # draw the center of the circle
+                    cv2.circle(self.cv_image,(bestFitCircle[0],bestFitCircle[1]),2,(0,0,255),3)
+                        # print(len(self.circles))
+                print (bestFitCircle[1] - self.lastCircle[1])
+                if bestFitCircle[1] - self.lastCircle[1] > 4:
+                    xAng = max(min(self.kp*(bestFitCircle[1] - self.lastCircle[1]), 1), -1)
 
 
-
-                cv2.circle(self.cv_image,(self.circles[0, ind, 0],self.circles[0, ind, 1]),self.circles[0, ind, 2],(0,255,0),2)
-                    # draw the center of the circle
-                cv2.circle(self.cv_image,(self.circles[0, ind, 0],self.circles[0, ind, 1]),2,(0,0,255),3)
-                    # print(len(self.circles))
-
+                self.lastCircle = bestFitCircle
             if not self.binary_image is None:
                 cv2.imshow('video_window2', self.binary_image)
             if not self.cv_image is None:
@@ -147,8 +155,10 @@ class Keeper(object):
             if not self.image_info_window is None:
                 cv2.imshow('image_info', self.image_info_window)
 
+            self.cmd_vel = Twist(linear=Vector3(x=xLin), angular=Vector3(z=xAng))
+            print(self.cmd_vel)
             cv2.waitKey(5)
-
+            self.pub.publish(self.cmd_vel)
             # start out not issuing any motor commands
             r.sleep()
 
