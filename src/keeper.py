@@ -25,13 +25,13 @@ class Keeper(object):
         """ Initialize the ball tracker """
         rospy.init_node('keeper')
         self.cmd_vel = Twist(linear=Vector3(0, 0, 0), angular=Vector3(0, 0, 0))
-        self.blue = 150
-        self.red = 100
-        self.green = 100
+        self.blue_ub = 150
+        self.red_ub = 100
+        self.green_ub = 100
         self.max_radius_1 = 150
         self.min_radius_1 = 10
-        self.param1 = 50
-        self.param2 = 20
+        self.blue_lb= 0
+        self.red_lb = 0
         self.kp = 0.05
         if cv2.__version__ == '3.1.0-dev':
             self.houghGrad = cv2.HOUGH_GRADIENT
@@ -53,39 +53,40 @@ class Keeper(object):
         # cv2.setMouseCallback('video_window', self.process_mouse_event)
         self.center_x=None
         self.center_y = None
-        self.circles = None
-        self.min_dist = 0
+        self.green_lb = 0
         self.xAng = 0
         self.maskList= []
 
-        cv2.createTrackbar('Minimum Distance', 'video_window', 60, 255, self.set_min_dist)
-        cv2.createTrackbar('param1', 'video_window', 0, 255, self.set_param1)
-        cv2.createTrackbar('param2', 'video_window', 0, 255, self.set_param2)
+        cv2.createTrackbar('blue_lb', 'video_window', 0, 255, self.set_blue_lb)
+        cv2.createTrackbar('green_lb', 'video_window', 60, 255, self.set_green_lb)
+        cv2.createTrackbar('red_lb', 'video_window', 0, 255, self.set_red_lb)
+        cv2.createTrackbar('blue_ub', 'video_window', 0, 255, self.set_blue_ub)
+        cv2.createTrackbar('red_ub', 'video_window', 0, 255, self.set_red_ub)
+        cv2.createTrackbar('green_ub', 'video_window', 0, 255, self.set_green_ub)
         cv2.createTrackbar('min_radius_1', 'video_window', 0, 255, self.set_min_radius_1)
         cv2.createTrackbar('max_radius_1', 'video_window', 0, 2000, self.set_max_radius_1)
-        cv2.createTrackbar('red', 'video_window', 0, 255, self.set_red)
-        cv2.createTrackbar('green', 'video_window', 0, 255, self.set_green)
-        cv2.createTrackbar('blue', 'video_window', 0, 255, self.set_blue)
 
-    def set_blue(self, val):
+
+
+    def set_blue_ub(self, val):
         """set value of blue max"""
-        self.blue = val
+        self.blue_ub = val
 
-    def set_red(self, val):
+    def set_red_ub(self, val):
         """ set value of red"""
-        self.red = val
+        self.red_ub = val
 
-    def set_green(self, val):
+    def set_green_ub(self, val):
         """ set val of green """
-        self.green = val
+        self.green_ub = val
 
-    def set_param1(self, val):
+    def set_blue_lb(self, val):
         """ set val of param1"""
-        self.param1 = val
+        self.blue_lb = val
 
-    def set_param2(self, val):
+    def set_red_lb(self, val):
         """ sets val of param2"""
-        self.param2 = val
+        self.red_lb = val
 
     def set_min_radius_1(self, val):
         """ sets min radius"""
@@ -95,15 +96,15 @@ class Keeper(object):
         """ sets max radius"""
         self.max_radius_1 = val
 
-    def set_min_dist(self, val):
+    def set_green_lb(self, val):
         """ Sets min dist btw circles"""
-        self.min_dist = val
+        self.green_lb = val
 
     def process_image(self, msg):
         """ Process image messages from ROS and stash them in an attribute
             called cv_image for subsequent processing """
         self.cv_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding="bgr8")
-        self.binary_image = cv2.inRange(self.cv_image, (50,0,0), (self.blue,self.green,self.red))
+        self.binary_image = cv2.inRange(self.cv_image, (self.blue_lb,self.green_lb,self.red_lb), (self.blue_ub,self.green_ub,self.red_ub))
         #moments = cv2.moments(self.binary_image)
 
         #self.circles = cv2.HoughCircles(self.binary_image,cv.CV_HOUGH_GRADIENT,1,20,
@@ -166,6 +167,13 @@ class Keeper(object):
             # return positive value
             self.xAng = .5 * 1
         return self.xAng
+
+    def get_dist(self, radius):
+        a = 221.2
+        b = -0.3178
+        d =  radius
+        dist = math.log((d / a)) / b
+        return dist
 
     def run(self):
         """ The main run loop, in this node it doesn't do anything """
@@ -239,8 +247,9 @@ class Keeper(object):
                 if not self.binary_image is None:
                     cv2.imshow('mask', binImg)
 
-
-
+                print('radius:  ', self.bestCircle[2])
+                dist = self.get_dist(self.bestCircle[2])
+                print('dist =', dist)
 
                 self.cmd_vel = Twist(linear=Vector3(x=xLin), angular=Vector3(z=self.predictor(self.lastCircle, bestFitCircle)))
                 print(self.cmd_vel)
