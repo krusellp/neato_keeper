@@ -56,6 +56,10 @@ class Keeper(object):
         self.green_lb = 0
         self.xAng = 0
         self.maskList= []
+        self.update = True
+        self.last_time = 0
+        self.time_stamp = 1
+        self.delta_t = .01
 
         cv2.createTrackbar('blue_lb', 'video_window', 0, 255, self.set_blue_lb)
         cv2.createTrackbar('green_lb', 'video_window', 60, 255, self.set_green_lb)
@@ -106,6 +110,10 @@ class Keeper(object):
         self.cv_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding="bgr8")
         self.binary_image = cv2.inRange(self.cv_image, (self.blue_lb,self.green_lb,self.red_lb), (self.blue_ub,self.green_ub,self.red_ub))
         #moments = cv2.moments(self.binary_image)
+        # print msg.header.stamp.to_sec()
+        if self.update:
+            self.time_stamp = msg.header.stamp.to_sec()
+            self.update = False
 
         #self.circles = cv2.HoughCircles(self.binary_image,cv.CV_HOUGH_GRADIENT,1,20,
                             #param1=self.param1,param2=self.param2,minRadius=self.min_radius_1,maxRadius=self.max_radius_1)
@@ -160,20 +168,66 @@ class Keeper(object):
 
     def predictor(self, circle_prev, circle_current):
         """choses a direction based on the ball's path fro 2 frames"""
-        if circle_current[1] - circle_prev[1] > 0:
-            # return negative value
-            self.xAng = .5 * -1
-        if circle_current[1] - circle_prev[1] < 0:
-            # return positive value
-            self.xAng = .5 * 1
-        return self.xAng
+        # if circle_current[1] - circle_prev[1] > 0:
+        #     # return negative value
+        #     self.xAng = .5 * -1
+        # if circle_current[1] - circle_prev[1] < 0:
+        #     # return positive value
+        #     self.xAng = .5 * 1
+        # return self.xAng
 
-    def get_dist(self, radius):
+        # finds distance of first and second circles
         a = 221.2
         b = -0.3178
-        d =  radius
-        dist = math.log((d / a)) / b
-        return dist
+        # fps = 60
+
+        d1 = circle_prev[2]
+        d2 = circle_current[2]
+
+        # print('last time', self.last_time)
+        # print('time stamp', self.time_stamp)
+        if self.last_time != self.time_stamp:
+            self.delta_t = self.last_time - self.time_stamp
+
+        if not d1 == 0:
+
+            ft_px1 = 7 / (24 * circle_prev[2])
+            ft_px2 = 7 / (24 * circle_current[2])
+
+            y_dist_1 = math.log((d1 / a)) / b
+            y_dist_2 = math.log((d2 / a)) / b
+
+            size = (self.cv_image.shape[0] / 2) + 90
+            x_dist_1 = (circle_prev[0] - size) * ft_px1
+            x_dist_2 = (circle_current[0] - size) * ft_px2
+            
+            y_diff = (y_dist_2 - y_dist_1) / self.delta_t # gives speed in ft/s
+            x_diff = (x_dist_2 - x_dist_1) / self.delta_t
+            return y_diff, x_diff
+        else:
+            return 0,0
+
+
+
+    def vector_finder(self, dx, dy):
+        """ creates a vector"""
+        if dy != 0:
+            angle = math.atan(dx/dy)
+            mag = math.hypot(dx,dy)
+            return angle, mag
+        else:
+            return 0, 0
+
+
+    # def get_dist(self, radius):
+    #     a = 221.2
+    #     b = -0.3178
+    #     d =  radius
+    #     dist = math.log((d / a)) / b
+    #     return dist
+
+
+
 
     def run(self):
         """ The main run loop, in this node it doesn't do anything """
@@ -247,16 +301,28 @@ class Keeper(object):
                 if not self.binary_image is None:
                     cv2.imshow('mask', binImg)
 
-                print('radius:  ', self.bestCircle[2])
-                dist = self.get_dist(self.bestCircle[2])
-                print('dist =', dist)
+                # print('radius:  ', self.bestCircle[2])
+                # dist = self.get_dist(self.bestCircle[2])
+                # print('dist =', dist)
+                # print('last', self.lastCircle)
+                # print('best', self.bestCircle[0])
+                if self.lastCircle[0] != self.bestCircle[0]:
+                    dy, dx = self.predictor(self.lastCircle, self.bestCircle)
+                    print('dy',dy)
+                    print('dx', dx)
+                    ang, mag = self.vector_finder(dx, dy)
+                    print('ang', ang)
+                    print('mag', mag)
+                # print('pixels', self.bestCircle[0] - self.cv_image.shape[0]/2)
+                self.lastCircle = self.bestCircle
 
-                self.cmd_vel = Twist(linear=Vector3(x=xLin), angular=Vector3(z=self.predictor(self.lastCircle, bestFitCircle)))
-                print(self.cmd_vel)
+                # self.cmd_vel = Twist(linear=Vector3(x=xLin), angular=Vector3(z=self.predictor(self.lastCircle, bestFitCircle)))
+                # print(self.cmd_vel)
                 cv2.waitKey(5)
                 #self.pub.publish(self.cmd_vel)
 
-                self.lastCircle = bestFitCircle
+                self.last_time = self.time_stamp
+                self.update = True
                 # start out not issuing any motor commands
             r.sleep()
 
