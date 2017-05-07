@@ -7,10 +7,12 @@ from sensor_msgs.msg import Image
 from copy import deepcopy
 from cv_bridge import CvBridge
 import numpy as np
-from geometry_msgs.msg import Twist, Vector3
+from geometry_msgs.msg import Twist, Vector3, Point
 if not cv2.__version__ == '3.1.0-dev':
     import cv2.cv as cv
 import math
+from visualization_msgs.msg import Marker
+
 
 class Keeper(object):
     """ The Keeper is a Python object that encompasses a ROS node
@@ -34,6 +36,9 @@ class Keeper(object):
         self.red_lb = 0
         self.kp = 0.05
 
+        # for visualizing the vector
+        self.visualizer = rospy.Publisher("/Marker", Marker, queue_size=10)
+
         #For different versions of OpenCV. Selects which
         #variable based on which version you have
         if cv2.__version__ == '3.1.0-dev':
@@ -51,7 +56,7 @@ class Keeper(object):
         #Publisher to cmd_vel
         self.pub = rospy.Publisher('cmd_vel', Twist, queue_size=10)
 
-
+        #  initializing variables needed later
         self.center_x=None
         self.center_y = None
 
@@ -71,12 +76,12 @@ class Keeper(object):
         rospy.Subscriber(image_topic, Image, self.process_image)
 
         #Sliders for selecting parameters. Allows adjustment of camera
-        cv2.createTrackbar('blue_lb', 'video_window', 0, 255, self.set_blue_lb)
+        cv2.createTrackbar('blue_lb', 'video_window', 15, 255, self.set_blue_lb)
         cv2.createTrackbar('green_lb', 'video_window', 60, 255, self.set_green_lb)
         cv2.createTrackbar('red_lb', 'video_window', 0, 255, self.set_red_lb)
-        cv2.createTrackbar('blue_ub', 'video_window', 0, 255, self.set_blue_ub)
+        cv2.createTrackbar('blue_ub', 'video_window', 230, 255, self.set_blue_ub)
         cv2.createTrackbar('red_ub', 'video_window', 0, 255, self.set_red_ub)
-        cv2.createTrackbar('green_ub', 'video_window', 0, 255, self.set_green_ub)
+        cv2.createTrackbar('green_ub', 'video_window', 117, 255, self.set_green_ub)
         cv2.createTrackbar('min_radius_1', 'video_window', 0, 255, self.set_min_radius_1)
         cv2.createTrackbar('max_radius_1', 'video_window', 0, 2000, self.set_max_radius_1)
 
@@ -199,14 +204,14 @@ class Keeper(object):
             Returns X, Y, X Velocity, Y Velocity"""
 
 
-        # finds distance of first and second circles
-
+        # finds distance of previous (1) and current (2) circles
+        
         #Coefficients for best fit Function
         #y = a*exp(b*x)
         a = 221.2
         b = -0.3178
 
-        #stores current circles
+        #stores radii of current and previous circles
         d1 = circle_prev[2]
         d2 = circle_current[2]
 
@@ -219,8 +224,8 @@ class Keeper(object):
         if not d1 == 0:
 
             #Calculate foot to pixel ratio for each circle position
-            ft_px1 = 7 / (24 * circle_prev[2])
-            ft_px2 = 7 / (24 * circle_current[2])
+            ft_px1 = 7 / (24 * d1)
+            ft_px2 = 7 / (24 * d2)
 
             #Calculate y depth
             y_dist_1 = math.log((d1 / a)) / b
@@ -233,31 +238,65 @@ class Keeper(object):
             x_dist_2 = (circle_current[0] - size) * ft_px2
 
             #Based on last 2 depths, calculate x and y velocity
-            y_diff = (y_dist_2 - y_dist_1) / self.delta_t # gives speed in ft/s
-            x_diff = (x_dist_2 - x_dist_1) / self.delta_t
+            y_vel = (y_dist_2 - y_dist_1) / self.delta_t # gives speed in ft/s
+            x_vel = (x_dist_2 - x_dist_1) / self.delta_t
 
             #Return current ball position and velocity
-            return x_dist_2, y_dist_2, y_diff, x_diff
+            return x_dist_2, y_dist_2, y_vel, x_vel
         else:
             #if last circle is 0, return 0
             return 0, 0, 0, 0
 
 
 
-    def vector_finder(self, dx, dy):
+    def vector_finder(self, vx, vy):
         """Converts velocity from cartesian to polar
             Takes x and y velocity
             Returns angle and magnitude of velocity"""
 
         #If y changed
-        if dy != 0:
+        if vy != 0:
             #Calc angle and magnitude
-            angle = math.atan(dx/dy)
-            mag = math.hypot(dx,dy)
+            angle = math.atan(vx/vy)
+            mag = math.hypot(vx,vy)
             return angle, mag
         else:
             return 0, 0
 
+    def visualize_obstacle(self, dy, dx, vy, vx, mag):
+        """ 
+        visualizes the magnitude and velocity of the vector
+        dy = y cord of ball
+        dx = x cord of ball
+        vy = y vel of ball
+        vx = x vel of ball
+        mag = magnitude of vector
+        returns an arrow vector
+        """
+        ft_to_m = 0.3 # rviz uses meters
+
+        # prepping
+        vel_marker = Marker(type=Marker.ARROW)
+        vel_marker.header.frame_id = "base_link"
+
+        # creating the start point
+        start_point = Point()
+        start_point.x = dx * ft_to_m
+        start_point.y = dy * ft_to_m
+
+        # creating the end point
+        end_point = Point()
+        end_point.x = vx * ft_to_m
+        end_point.y = vy * ft_to_m
+        vel_marker.points = [start_point, end_point]
+
+        # scaling the length of the arrow by the magnitude
+        vel_marker.scale.y = mag * ft_to_m
+        vel_marker.scale.x = .2
+        vel_marker.color.a = 1
+
+        # publishing
+        self.visualizer.publish(vel_marker)
 
     def run(self):
         """ The main run loop"""
@@ -331,12 +370,14 @@ class Keeper(object):
                 if self.lastCircle[0] != self.bestCircle[0]:
 
                     #Predict position and velocity
-                    xCoord, yCoord, dy, dx = self.predictor(self.lastCircle, self.bestCircle)
-                    print('dy',dy)
-                    print('dx', dx)
-                    ang, mag = self.vector_finder(dx, dy)
+                    xCoord, yCoord, vy, vx = self.predictor(self.lastCircle, self.bestCircle)
+                    print('vy',vy)
+                    print('vx', vx)
+                    ang, mag = self.vector_finder(vx, vy)
                     print('ang', ang)
                     print('mag', mag)
+
+                    self.visualize_obstacle(yCoord, xCoord, vy, vx, mag)
 
                 #Set last circle to current
                 self.lastCircle = self.bestCircle
